@@ -7,7 +7,7 @@ import requests
 from openai import OpenAI
 
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = f"https://your-app-name.onrender.com/{TOKEN}"  # Replace with your actual Render/Koyeb URL
+WEBHOOK_URL = f"https://new-quiz-ubbm.onrender.com/{TOKEN}"  # Replace with your actual Render/Koyeb URL
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 GEMINI_AI_KEY = os.getenv("GEMINI_AI_KEY")
 PORT = int(os.environ.get("PORT", 8080))
