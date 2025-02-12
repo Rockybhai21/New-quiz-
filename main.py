@@ -3,7 +3,6 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler
 from dotenv import load_dotenv
-from database import init_db, save_quiz, get_quiz, save_response
 
 # Load environment variables
 load_dotenv()
@@ -12,13 +11,11 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize database
-init_db()
+# Quiz data storage (in-memory for simplicity)
+quizzes = {}
 
 # Start command
 async def start(update: Update, context: CallbackContext):
-    user_id = update.message.from_user.id
-    logger.info(f"User {user_id} started the bot.")
     await update.message.reply_text("Welcome to Quiz Bot! Use /create to start creating a quiz.")
 
 # Create quiz command
@@ -44,43 +41,76 @@ async def handle_message(update: Update, context: CallbackContext):
 
     elif step == "question":
         question = update.message.text
-        quiz_id = save_quiz(context.user_data["title"], context.user_data.get("description"), question)
-        context.user_data["quiz_id"] = quiz_id
+        quiz_id = str(len(quizzes) + 1)  # Generate a unique quiz ID
+        quizzes[quiz_id] = {
+            "title": context.user_data["title"],
+            "description": context.user_data.get("description", ""),
+            "questions": [question],
+            "creator": user_id,
+        }
         await update.message.reply_text(f"Question added! Use /add to add more questions or /finish to complete the quiz.")
         context.user_data["step"] = "add_questions"
+        context.user_data["quiz_id"] = quiz_id
 
     elif step == "add_questions":
         if update.message.text.lower() == "/finish":
             quiz_id = context.user_data["quiz_id"]
-            await update.message.reply_text(f"Quiz created successfully! Use /start_quiz_{quiz_id} to start the quiz.")
+            await show_quiz_menu(update, context, quiz_id)
             context.user_data.clear()
         else:
-            save_quiz(context.user_data["title"], context.user_data.get("description"), update.message.text)
+            quizzes[context.user_data["quiz_id"]]["questions"].append(update.message.text)
             await update.message.reply_text(f"Question added! Use /add to add more questions or /finish to complete the quiz.")
 
-# Start quiz command
-async def start_quiz(update: Update, context: CallbackContext):
-    quiz_id = int(context.args[0])
-    quiz = get_quiz(quiz_id)
-    if quiz:
-        await update.message.reply_text(f"Quiz: {quiz['title']}\nDescription: {quiz.get('description', 'No description')}")
-        await update.message.reply_text(f"Question: {quiz['question']}")
-    else:
-        await update.message.reply_text("Quiz not found.")
+# Show quiz menu
+async def show_quiz_menu(update: Update, context: CallbackContext, quiz_id):
+    quiz = quizzes[quiz_id]
+    keyboard = [
+        [InlineKeyboardButton("Start Quiz", callback_data=f"start_{quiz_id}")],
+        [InlineKeyboardButton("Share Quiz", callback_data=f"share_{quiz_id}")],
+        [InlineKeyboardButton("Delete Quiz", callback_data=f"delete_{quiz_id}")],
+        [InlineKeyboardButton("Close", callback_data="close")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        f"Quiz created successfully!\nTitle: {quiz['title']}\nDescription: {quiz.get('description', 'No description')}\nQuestions: {len(quiz['questions'])}",
+        reply_markup=reply_markup,
+    )
 
-# Handle quiz responses
-async def handle_quiz_response(update: Update, context: CallbackContext):
-    user_id = update.message.from_user.id
-    quiz_id = context.user_data.get("quiz_id")
-    user_answer = update.message.text
-    correct_answer = get_quiz(quiz_id)["answer"]
+# Handle button clicks
+async def handle_button_click(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
 
-    if user_answer.lower() == correct_answer.lower():
-        save_response(user_id, quiz_id, True)
-        await update.message.reply_text("Correct!")
+    if data.startswith("start_"):
+        quiz_id = data.split("_")[1]
+        await start_quiz(query, context, quiz_id)
+    elif data.startswith("share_"):
+        quiz_id = data.split("_")[1]
+        await share_quiz(query, context, quiz_id)
+    elif data.startswith("delete_"):
+        quiz_id = data.split("_")[1]
+        await delete_quiz(query, context, quiz_id)
+    elif data == "close":
+        await query.edit_message_text("Menu closed.")
+
+# Start quiz
+async def start_quiz(query, context: CallbackContext, quiz_id):
+    quiz = quizzes[quiz_id]
+    await query.edit_message_text(f"Starting quiz: {quiz['title']}\nFirst question: {quiz['questions'][0]}")
+
+# Share quiz
+async def share_quiz(query, context: CallbackContext, quiz_id):
+    quiz_link = f"https://t.me/your_bot_username?start=quiz_{quiz_id}"
+    await query.edit_message_text(f"Share this link to invite others to take the quiz: {quiz_link}")
+
+# Delete quiz
+async def delete_quiz(query, context: CallbackContext, quiz_id):
+    if quiz_id in quizzes:
+        del quizzes[quiz_id]
+        await query.edit_message_text("Quiz deleted successfully!")
     else:
-        save_response(user_id, quiz_id, False)
-        await update.message.reply_text(f"Incorrect! The correct answer is {correct_answer}.")
+        await query.edit_message_text("Quiz not found.")
 
 # Main function
 def main():
@@ -93,9 +123,9 @@ def main():
     # Add handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("create", create_quiz))
-    app.add_handler(CommandHandler("start_quiz", start_quiz))
+    app.add_handler(CommandHandler("finish", handle_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(CallbackQueryHandler(handle_quiz_response))
+    app.add_handler(CallbackQueryHandler(handle_button_click))
 
     app.run_polling()
 
