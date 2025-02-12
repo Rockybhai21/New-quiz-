@@ -4,7 +4,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler
 from dotenv import load_dotenv
 from database import init_db, save_quiz, get_quiz, save_response
-from utils import translate, rate_limit
 
 # Load environment variables
 load_dotenv()
@@ -17,12 +16,10 @@ logger = logging.getLogger(__name__)
 init_db()
 
 # Start command
-@rate_limit(5)  # Allow 5 requests per user
 async def start(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
     logger.info(f"User {user_id} started the bot.")
-    welcome_message = translate("welcome", "en")  # Default to English
-    await update.message.reply_text(welcome_message)
+    await update.message.reply_text("Welcome to Quiz Bot! Use /create to start creating a quiz.")
 
 # Create quiz command
 async def create_quiz(update: Update, context: CallbackContext):
@@ -48,22 +45,28 @@ async def handle_message(update: Update, context: CallbackContext):
     elif step == "question":
         question = update.message.text
         quiz_id = save_quiz(context.user_data["title"], context.user_data.get("description"), question)
+        context.user_data["quiz_id"] = quiz_id
         await update.message.reply_text(f"Question added! Use /add to add more questions or /finish to complete the quiz.")
         context.user_data["step"] = "add_questions"
 
     elif step == "add_questions":
         if update.message.text.lower() == "/finish":
-            await update.message.reply_text(f"Quiz created successfully! Use /share_{quiz_id} to share it.")
+            quiz_id = context.user_data["quiz_id"]
+            await update.message.reply_text(f"Quiz created successfully! Use /start_quiz_{quiz_id} to start the quiz.")
             context.user_data.clear()
         else:
             save_quiz(context.user_data["title"], context.user_data.get("description"), update.message.text)
             await update.message.reply_text(f"Question added! Use /add to add more questions or /finish to complete the quiz.")
 
-# Share quiz command
-async def share_quiz(update: Update, context: CallbackContext):
-    quiz_id = context.args[0]
-    quiz_link = f"https://t.me/your_bot_username?start=quiz_{quiz_id}"
-    await update.message.reply_text(f"Share this link to invite others to take the quiz: {quiz_link}")
+# Start quiz command
+async def start_quiz(update: Update, context: CallbackContext):
+    quiz_id = int(context.args[0])
+    quiz = get_quiz(quiz_id)
+    if quiz:
+        await update.message.reply_text(f"Quiz: {quiz['title']}\nDescription: {quiz.get('description', 'No description')}")
+        await update.message.reply_text(f"Question: {quiz['question']}")
+    else:
+        await update.message.reply_text("Quiz not found.")
 
 # Handle quiz responses
 async def handle_quiz_response(update: Update, context: CallbackContext):
@@ -90,7 +93,7 @@ def main():
     # Add handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("create", create_quiz))
-    app.add_handler(CommandHandler("share", share_quiz))
+    app.add_handler(CommandHandler("start_quiz", start_quiz))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_quiz_response))
 
